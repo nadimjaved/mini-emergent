@@ -6,8 +6,6 @@ import { execa } from "execa";
 const app = express();
 app.use(express.json());
 
-const runningProjects = new Map();
-
 const getProjectPath = (name) => path.resolve("../projects", name);
 
 const __filename = fileURLToPath(import.meta.url);
