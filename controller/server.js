@@ -130,6 +130,89 @@ app.post("/projects/create", (req, res) => {
     console.error(err);
     return res.status(500).json({ error: "Failed to create project" });
   }
+
+  const projectPath = getProjectPath(name);
+  const packageJsonPath = path.join(projectPath, "package.json");
+
+  if (!fs.existsSync(projectPath)) {
+    return res.status(404).json({ error: "Project directory not found", projectPath });
+  }
+
+  if (!fs.existsSync(packageJsonPath)) {
+    return res.status(400).json({ error: "No package.json found for project", projectPath });
+  }
+
+  const subprocess = execa("npm", ["start"], {
+    cwd: projectPath,
+    env: process.env,
+    stdio: "pipe",
+  });
+
+  const startedAt = new Date().toISOString();
+  runningProjects.set(name, {
+    name,
+    pid: subprocess.pid,
+    projectPath,
+    command: "npm",
+    args: ["start"],
+    startedAt,
+    status: "running",
+    process: subprocess,
+  });
+
+  subprocess.stdout?.on("data", (chunk) => {
+    process.stdout.write(`[${name}] ${chunk.toString()}`);
+  });
+
+  subprocess.stderr?.on("data", (chunk) => {
+    process.stderr.write(`[${name}] ${chunk.toString()}`);
+  });
+
+  subprocess.then(
+    () => {
+      runningProjects.delete(name);
+      console.log(`[${name}] process exited successfully`);
+    },
+    (error) => {
+      runningProjects.delete(name);
+      console.error(`[${name}] process exited with error: ${error.shortMessage || error.message}`);
+    },
+  );
+
+  return res.json({
+    ok: true,
+    message: "Project started",
+    project: serializeRunningProject(runningProjects.get(name)),
+  });
+});
+
+app.post("/projects/stop", (req, res) => {
+  const { name } = req.body;
+
+  if (!validateProjectName(name)) {
+    return res
+      .status(400)
+      .json({ error: "Valid project name required (letters, numbers, dash, underscore)" });
+  }
+
+  const running = runningProjects.get(name);
+  if (!running) {
+    return res.status(404).json({ error: "Project is not running", name });
+  }
+
+  try {
+    running.status = "stopping";
+    running.process.kill("SIGTERM", { forceKillAfterDelay: 5000 });
+    return res.json({ ok: true, message: "Stop signal sent", name, pid: running.pid });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Failed to stop project", details: error.message });
+  }
+});
+
+app.get("/projects/running", (req, res) => {
+  const projects = Array.from(runningProjects.values()).map(serializeRunningProject);
+  return res.json({ ok: true, count: projects.length, projects });
 });
 
 app.post("/projects/start", (req, res) => {
